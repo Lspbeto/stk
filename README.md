@@ -58,3 +58,12 @@ Este é um MVP funcional e educacional, não uma plataforma institucional audita
 - `GET /api/leaderboard`, `GET /api/certificate`
 - `POST /api/classrooms`, `POST /api/classrooms/join`
 - `GET /api/teacher/dashboard`
+
+
+## Trilha especial: aprenda a construir o STOK
+
+O Academy inclui uma trilha baseada no código-fonte e no README da branch reorganizacao-back-front do repositório [Lspbeto/stok](https://github.com/Lspbeto/stok/tree/reorganizacao-back-front). Ela ensina os comandos documentados para preparar, executar, testar e publicar o projeto, além dos principais comandos e padrões de código presentes no STOK.
+
+Conteúdos: terminal e PowerShell; npm; Git e branches; Node.js e JavaScript; Express e rotas HTTP; autenticação JWT e bcrypt; MongoDB/Mongoose; validação de CNPJ; regras de estoque, setores, patrimônio e prestação de contas; auditoria; CSV e SMTP; backup Extended JSON; DOM, localStorage, integração front/back e publicação no Render.
+
+Fidelidade ao projeto: exemplos de terminal reproduzem comandos documentados no README do STOK. Aulas de código explicam operações encontradas nos arquivos da branch de referência. Recursos discutidos mas que não aparecem nessa versão do código não são apresentados como implementados.

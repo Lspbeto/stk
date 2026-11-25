@@ -7,6 +7,7 @@ const Database = require("better-sqlite3");
 const path = require("node:path");
 const fs = require("node:fs");
 const courses = require("./data/courses");
+const stokCourses = require("./data/stok-curriculum");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -103,7 +104,7 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
 });
 app.get("/api/me", auth, (req, res) => res.json({ user: req.user }));
 
-app.get("/api/courses", (_req, res) => res.json(courses.map(c => ({ ...c, lessons: c.lessons.map(safeLesson) }))));
+app.get("/api/courses", (_req, res) => res.json([...courses, ...stokCourses].map(c => ({ ...c, lessons: c.lessons.map(safeLesson) }))));
 app.get("/api/progress", auth, (req, res) => {
   const rows = db.prepare("SELECT lesson_id,completed,best_score,attempts,completed_at FROM lesson_progress WHERE user_id=?").all(req.user.id);
   const completed = rows.filter(r => r.completed).length;

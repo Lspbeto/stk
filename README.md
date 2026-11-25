@@ -89,3 +89,14 @@ Abra http://localhost:3000. No primeiro acesso, crie o administrador geral.
 ### Hospedagem ligada ao GitHub
 
 O GitHub armazena o código e pode disparar deploy automático, mas GitHub Pages não executa o servidor Node.js nem fornece banco persistente. Publique o Node.js em Render ou serviço equivalente, conectando este repositório. Configure JWT_SECRET e um disco persistente para DB_PATH (ou migre para banco gerenciado). Não guarde contas e progresso no armazenamento efêmero de uma hospedagem.
+
+
+### Verificações automáticas
+
+O workflow do GitHub Actions executa verificações de sintaxe e testes de integração para o cadastro inicial, criação de processos e responsáveis, cadastro de alunos e isolamento das permissões. Execute localmente com `npm test`.
+
+O banco dos testes é temporário e separado do banco de uso real.
+
+### Publicação
+
+O arquivo `render.yaml` prepara o serviço Node.js e o disco persistente. A publicação exige conectar e autorizar a conta de hospedagem a acessar este repositório. O GitHub Pages, sozinho, não executa a API Node.js nem mantém o banco de dados.

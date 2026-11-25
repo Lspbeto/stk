@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express=require("express"),helmet=require("helmet"),rateLimit=require("express-rate-limit"),bcrypt=require("bcryptjs"),jwt=require("jsonwebtoken"),Database=require("better-sqlite3"),path=require("node:path"),fs=require("node:fs"),crypto=require("node:crypto");
 const courses=require("./data/courses"),stokCourses=require("./data/stok-curriculum"),app=express(),PORT=process.env.PORT||3000;
 const JWT_SECRET=process.env.JWT_SECRET;if(process.env.NODE_ENV==="production"&&(!JWT_SECRET||JWT_SECRET.length<32))throw new Error("Defina JWT_SECRET com pelo menos 32 caracteres.");

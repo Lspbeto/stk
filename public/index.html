@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <meta name="description" content="Aprenda programação jogando: desafios, pontos, níveis e acompanhamento de turmas.">
+  <title>STK Academy — Aprenda programação jogando</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="STK Academy início"><span class="brand-mark">STK</span><span>ACADEMY</span></a>
+    <nav id="nav" class="nav"></nav>
+    <div id="account" class="account"></div>
+  </header>
+  <main id="app" class="container">
+    <section class="hero">
+      <div><p class="eyebrow">APRENDA FAZENDO</p><h1>Seu próximo nível<br><span>começa aqui.</span></h1>
+      <p class="hero-copy">Aprenda programação no seu ritmo, resolva desafios reais e acompanhe sua evolução.</p>
+      <button class="primary" id="start-btn">Começar a aprender</button></div>
+      <div class="hero-art" aria-hidden="true"><div class="code-window"><div class="dots">● ● ●</div><pre><span>const</span> futuro = <span>"dev"</span>;
+<span>function</span> aprender() {
+  <b>return</b> prática + curiosidade;
+}
+<span>console</span>.log(futuro);</pre><div class="level-chip">🚀 NÍVEL 1 · INICIANTE</div></div></div>
+    </section>
+    <section class="features"><article><b>🎯</b><h3>Desafios práticos</h3><p>Responda, complete códigos e aprenda com explicações.</p></article><article><b>⚡</b><h3>XP e níveis</h3><p>Ganhe pontos a cada conquista e acompanhe seu avanço.</p></article><article><b>👩‍🏫</b><h3>Turmas e professores</h3><p>Participe de uma turma e acompanhe resultados.</p></article></section>
+    <section id="auth-panel" class="auth-panel">
+      <div class="auth-intro"><p class="eyebrow">SUA JORNADA</p><h2>Crie sua conta gratuita</h2><p>Entre para salvar suas conquistas e continuar de onde parou.</p></div>
+      <form id="auth-form" class="auth-form">
+        <div class="tabs"><button type="button" class="tab active" data-mode="register">Criar conta</button><button type="button" class="tab" data-mode="login">Entrar</button></div>
+        <label id="name-wrap">Nome<input name="name" autocomplete="name" minlength="2" required placeholder="Seu nome"></label>
+        <label>E-mail<input name="email" type="email" autocomplete="email" required placeholder="voce@email.com"></label>
+        <label>Senha<input name="password" type="password" autocomplete="new-password" minlength="8" required placeholder="Mínimo de 8 caracteres"></label>
+        <button class="primary full" type="submit" id="auth-submit">Criar minha conta</button><p id="auth-message" class="message" role="status"></p>
+      </form>
+    </section>
+    <section id="workspace" hidden></section>
+  </main>
+  <footer><span>STK Academy</span><span>Aprender. Praticar. Evoluir.</span></footer>
+</body>
+</html>

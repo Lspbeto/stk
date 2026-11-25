@@ -67,3 +67,25 @@ O Academy inclui uma trilha baseada no código-fonte e no README da branch reorg
 Conteúdos: terminal e PowerShell; npm; Git e branches; Node.js e JavaScript; Express e rotas HTTP; autenticação JWT e bcrypt; MongoDB/Mongoose; validação de CNPJ; regras de estoque, setores, patrimônio e prestação de contas; auditoria; CSV e SMTP; backup Extended JSON; DOM, localStorage, integração front/back e publicação no Render.
 
 Fidelidade ao projeto: exemplos de terminal reproduzem comandos documentados no README do STOK. Aulas de código explicam operações encontradas nos arquivos da branch de referência. Recursos discutidos mas que não aparecem nessa versão do código não são apresentados como implementados.
+
+
+## Ambientes da plataforma
+
+- **Administrador geral:** o primeiro acesso apresenta o cadastro do administrador principal. Depois de criado, o cadastro inicial é bloqueado. O administrador cadastra processos e responsáveis, consulta todos os alunos e abre a visão individual de cada processo.
+- **Responsável do processo:** recebe usuário e senha quando o administrador cria o processo. Acessa somente o próprio processo e cadastra/acompanha os alunos vinculados.
+- **Aluno:** pode ser cadastrado pelo responsável ou criar sua conta informando o código do processo. Acessa com usuário e senha e tem o progresso vinculado ao processo.
+
+Senhas são armazenadas com bcrypt e as sessões usam JWT. O servidor valida o perfil em todas as rotas protegidas.
+
+### Execução local
+
+```bash
+npm install
+JWT_SECRET="uma-chave-aleatoria-com-mais-de-32-caracteres" npm start
+```
+
+Abra http://localhost:3000. No primeiro acesso, crie o administrador geral.
+
+### Hospedagem ligada ao GitHub
+
+O GitHub armazena o código e pode disparar deploy automático, mas GitHub Pages não executa o servidor Node.js nem fornece banco persistente. Publique o Node.js em Render ou serviço equivalente, conectando este repositório. Configure JWT_SECRET e um disco persistente para DB_PATH (ou migre para banco gerenciado). Não guarde contas e progresso no armazenamento efêmero de uma hospedagem.

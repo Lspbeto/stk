@@ -1,185 +1,37 @@
-const express = require("express");
-const helmet = require("helmet");
-const rateLimit = require("express-rate-limit");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const Database = require("better-sqlite3");
-const path = require("node:path");
-const fs = require("node:fs");
-const courses = require("./data/courses");
-const stokCourses = require("./data/stok-curriculum");
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET;
-if (process.env.NODE_ENV === "production" && (!JWT_SECRET || JWT_SECRET.length < 32)) {
-  throw new Error("Defina JWT_SECRET com pelo menos 32 caracteres no ambiente de produção.");
-}
-const secret = JWT_SECRET || "desenvolvimento-local-nao-usar-em-producao";
-const dbPath = process.env.DB_PATH || path.join(__dirname, "data", "stk-academy.sqlite");
-fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (
- id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
- password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'student',
- xp INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS lesson_progress (
- id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- lesson_id TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0, best_score INTEGER NOT NULL DEFAULT 0,
- attempts INTEGER NOT NULL DEFAULT 0, completed_at TEXT, UNIQUE(user_id, lesson_id)
-);
-CREATE TABLE IF NOT EXISTS attempts (
- id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- lesson_id TEXT NOT NULL, answer TEXT NOT NULL, correct INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS classrooms (
- id INTEGER PRIMARY KEY AUTOINCREMENT, teacher_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- name TEXT NOT NULL, join_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS classroom_members (
- classroom_id INTEGER NOT NULL REFERENCES classrooms(id) ON DELETE CASCADE,
- user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(classroom_id,user_id)
-);
-`);
-
-const allLessons = courses.flatMap(c => c.lessons);
-const lessonMap = new Map(allLessons.map(l => [l.id, l]));
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false });
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", "data:"], connectSrc: ["'self'"] } } }));
-app.use(express.json({ limit: "20kb" }));
-app.use(express.static(path.join(__dirname, "public")));
-
-function tokenFor(user) { return jwt.sign({ id: user.id }, secret, { expiresIn: "7d" }); }
-function auth(req, res, next) {
-  const raw = req.headers.authorization || "";
-  try {
-    const token = raw.startsWith("Bearer ") ? raw.slice(7) : "";
-    const payload = jwt.verify(token, secret);
-    const user = db.prepare("SELECT id,name,email,role,xp,created_at FROM users WHERE id=?").get(payload.id);
-    if (!user) return res.status(401).json({ error: "Sessão inválida." });
-    req.user = user; next();
-  } catch { return res.status(401).json({ error: "Faça login para continuar." }); }
-}
-function teacherOnly(req, res, next) {
-  if (req.user.role !== "teacher") return res.status(403).json({ error: "Acesso exclusivo do professor." });
-  next();
-}
-function publicUser(user) { const { password_hash, ...safe } = user; return safe; }
-function normalize(value) { return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " "); }
-function safeLesson(lesson) {
-  const { answer, solution, ...safe } = lesson;
-  return safe;
-}
-app.get("/api/health", (_req, res) => res.json({ ok: true, app: "STK Academy" }));
-
-app.post("/api/auth/register", authLimiter, async (req, res) => {
-  const name = String(req.body.name || "").trim();
-  const email = String(req.body.email || "").trim().toLowerCase();
-  const password = String(req.body.password || "");
-  if (name.length < 2 || name.length > 80) return res.status(400).json({ error: "Informe um nome entre 2 e 80 caracteres." });
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) return res.status(400).json({ error: "Informe um e-mail válido." });
-  if (password.length < 8 || password.length > 72) return res.status(400).json({ error: "A senha deve ter entre 8 e 72 caracteres." });
-  try {
-    const hash = await bcrypt.hash(password, 12);
-    const info = db.prepare("INSERT INTO users(name,email,password_hash) VALUES(?,?,?)").run(name, email, hash);
-    const user = db.prepare("SELECT id,name,email,role,xp,created_at FROM users WHERE id=?").get(info.lastInsertRowid);
-    res.status(201).json({ token: tokenFor(user), user });
-  } catch (e) {
-    if (String(e.code).includes("SQLITE_CONSTRAINT")) return res.status(409).json({ error: "Este e-mail já está cadastrado." });
-    res.status(500).json({ error: "Não foi possível criar a conta." });
-  }
-});
-app.post("/api/auth/login", authLimiter, async (req, res) => {
-  const email = String(req.body.email || "").trim().toLowerCase();
-  const password = String(req.body.password || "");
-  const user = db.prepare("SELECT * FROM users WHERE email=?").get(email);
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) return res.status(401).json({ error: "E-mail ou senha incorretos." });
-  const safe = publicUser(user);
-  res.json({ token: tokenFor(user), user: safe });
-});
-app.get("/api/me", auth, (req, res) => res.json({ user: req.user }));
-
-app.get("/api/courses", (_req, res) => res.json([...courses, ...stokCourses].map(c => ({ ...c, lessons: c.lessons.map(safeLesson) }))));
-app.get("/api/progress", auth, (req, res) => {
-  const rows = db.prepare("SELECT lesson_id,completed,best_score,attempts,completed_at FROM lesson_progress WHERE user_id=?").all(req.user.id);
-  const completed = rows.filter(r => r.completed).length;
-  res.json({ completed, total: allLessons.length, xp: req.user.xp, lessons: rows });
-});
-app.post("/api/lessons/:id/submit", auth, (req, res) => {
-  const lesson = lessonMap.get(req.params.id);
-  if (!lesson) return res.status(404).json({ error: "Desafio não encontrado." });
-  const answer = String(req.body.answer ?? "").slice(0, 1000);
-  const correct = normalize(answer) === normalize(lesson.answer);
-  const previous = db.prepare("SELECT * FROM lesson_progress WHERE user_id=? AND lesson_id=?").get(req.user.id, lesson.id);
-  const firstCompletion = correct && !previous?.completed;
-  const score = correct ? 100 : 0;
-  const tx = db.transaction(() => {
-    db.prepare("INSERT INTO attempts(user_id,lesson_id,answer,correct) VALUES(?,?,?,?)").run(req.user.id, lesson.id, answer, correct ? 1 : 0);
-    db.prepare(`INSERT INTO lesson_progress(user_id,lesson_id,completed,best_score,attempts,completed_at)
-      VALUES(?,?,?,?,1,CASE WHEN ?=1 THEN CURRENT_TIMESTAMP ELSE NULL END)
-      ON CONFLICT(user_id,lesson_id) DO UPDATE SET
-      completed=MAX(completed,excluded.completed), best_score=MAX(best_score,excluded.best_score),
-      attempts=attempts+1, completed_at=CASE WHEN lesson_progress.completed_at IS NULL AND excluded.completed=1 THEN CURRENT_TIMESTAMP ELSE lesson_progress.completed_at END`)
-      .run(req.user.id, lesson.id, correct ? 1 : 0, score, correct ? 1 : 0);
-    if (firstCompletion) db.prepare("UPDATE users SET xp=xp+? WHERE id=?").run(lesson.xp, req.user.id);
-  });
-  tx();
-  const updated = db.prepare("SELECT id,name,email,role,xp,created_at FROM users WHERE id=?").get(req.user.id);
-  const progress = db.prepare("SELECT COUNT(*) AS n FROM lesson_progress WHERE user_id=? AND completed=1").get(req.user.id).n;
-  res.json({ correct, firstCompletion, xpEarned: firstCompletion ? lesson.xp : 0, user: updated, completed: progress, total: allLessons.length, feedback: correct ? lesson.solution : lesson.hint, solution: correct ? lesson.solution : undefined });
-});
-
-app.get("/api/leaderboard", (_req, res) => {
-  const rows = db.prepare(`SELECT u.name,u.xp,COUNT(p.lesson_id) AS completed
-    FROM users u LEFT JOIN lesson_progress p ON p.user_id=u.id AND p.completed=1
-    WHERE u.role='student' GROUP BY u.id ORDER BY u.xp DESC,u.name ASC LIMIT 20`).all();
-  res.json(rows);
-});
-app.get("/api/certificate", auth, (req, res) => {
-  const completed = db.prepare("SELECT COUNT(*) AS n FROM lesson_progress WHERE user_id=? AND completed=1").get(req.user.id).n;
-  if (completed < allLessons.length) return res.status(403).json({ error: "Conclua todos os desafios para liberar o certificado.", completed, total: allLessons.length });
-  res.json({ eligible: true, name: req.user.name, course: "Trilha Fundamentos ao Back-end", completedAt: new Date().toISOString(), code: "STK-" + req.user.id + "-" + completed });
-});
-
-app.post("/api/classrooms", auth, teacherOnly, (req, res) => {
-  const name = String(req.body.name || "").trim().slice(0, 80);
-  if (name.length < 2) return res.status(400).json({ error: "Informe o nome da turma." });
-  let code;
-  do { code = Math.random().toString(36).slice(2, 8).toUpperCase(); }
-  while (db.prepare("SELECT id FROM classrooms WHERE join_code=?").get(code));
-  const info = db.prepare("INSERT INTO classrooms(teacher_id,name,join_code) VALUES(?,?,?)").run(req.user.id, name, code);
-  res.status(201).json({ id: info.lastInsertRowid, name, joinCode: code });
-});
-app.post("/api/classrooms/join", auth, (req, res) => {
-  if (req.user.role !== "student") return res.status(403).json({ error: "Somente contas de aluno podem entrar em turmas." });
-  const code = String(req.body.code || "").trim().toUpperCase();
-  const classroom = db.prepare("SELECT id,name FROM classrooms WHERE join_code=?").get(code);
-  if (!classroom) return res.status(404).json({ error: "Código de turma não encontrado." });
-  db.prepare("INSERT OR IGNORE INTO classroom_members(classroom_id,user_id) VALUES(?,?)").run(classroom.id, req.user.id);
-  res.json({ joined: true, classroom });
-});
-app.get("/api/teacher/dashboard", auth, teacherOnly, (req, res) => {
-  const classrooms = db.prepare("SELECT c.id,c.name,c.join_code AS joinCode,COUNT(m.user_id) AS students FROM classrooms c LEFT JOIN classroom_members m ON m.classroom_id=c.id WHERE c.teacher_id=? GROUP BY c.id ORDER BY c.id DESC").all(req.user.id);
-  const students = db.prepare(`SELECT u.id,u.name,u.email,u.xp,COUNT(p.lesson_id) AS completed
-    FROM classroom_members m JOIN classrooms c ON c.id=m.classroom_id JOIN users u ON u.id=m.user_id
-    LEFT JOIN lesson_progress p ON p.user_id=u.id AND p.completed=1
-    WHERE c.teacher_id=? GROUP BY u.id ORDER BY u.name`).all(req.user.id);
-  res.json({ classrooms, students, totals: { classrooms: classrooms.length, students: students.length } });
-});
-
-app.get("*", (req, res, next) => {
-  if (req.path.startsWith("/api/")) return next();
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-app.use("/api", (_req, res) => res.status(404).json({ error: "Rota não encontrada." }));
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).json({ error: "Erro interno. Tente novamente." });
-});
-
-app.listen(PORT, () => console.log(`STK Academy disponível na porta ${PORT}`));
+const express=require("express"),helmet=require("helmet"),rateLimit=require("express-rate-limit"),bcrypt=require("bcryptjs"),jwt=require("jsonwebtoken"),Database=require("better-sqlite3"),path=require("node:path"),fs=require("node:fs"),crypto=require("node:crypto");
+const courses=require("./data/courses"),stokCourses=require("./data/stok-curriculum"),app=express(),PORT=process.env.PORT||3000;
+const JWT_SECRET=process.env.JWT_SECRET;if(process.env.NODE_ENV==="production"&&(!JWT_SECRET||JWT_SECRET.length<32))throw new Error("Defina JWT_SECRET com pelo menos 32 caracteres.");
+const secret=JWT_SECRET||"desenvolvimento-local-nao-usar-em-producao",dbPath=process.env.DB_PATH||path.join(__dirname,"data","stk-academy.sqlite");
+fs.mkdirSync(path.dirname(dbPath),{recursive:true});const db=new Database(dbPath);db.pragma("journal_mode = WAL");db.pragma("foreign_keys = ON");
+db.exec(\`CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,email TEXT NOT NULL UNIQUE,password_hash TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'student',xp INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS processes(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL,description TEXT DEFAULT '',join_code TEXT NOT NULL UNIQUE,manager_id INTEGER,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(manager_id) REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS lesson_progress(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,lesson_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0,best_score INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,completed_at TEXT,UNIQUE(user_id,lesson_id));
+CREATE TABLE IF NOT EXISTS attempts(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,lesson_id TEXT NOT NULL,answer TEXT NOT NULL,correct INTEGER NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);\`);
+const cols=db.prepare("PRAGMA table_info(users)").all().map(c=>c.name);if(!cols.includes("username"))db.exec("ALTER TABLE users ADD COLUMN username TEXT");if(!cols.includes("process_id"))db.exec("ALTER TABLE users ADD COLUMN process_id INTEGER");if(!cols.includes("active"))db.exec("ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
+db.prepare("SELECT id,email FROM users WHERE username IS NULL OR username=''").all().forEach(u=>db.prepare("UPDATE users SET username=? WHERE id=?").run((String(u.email).split("@")[0].replace(/[^a-z0-9._-]/gi,"").slice(0,20)||"aluno")+u.id,u.id));
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL; CREATE INDEX IF NOT EXISTS idx_users_process ON users(process_id)");
+const allCourses=[...courses,...stokCourses],allLessons=allCourses.flatMap(c=>c.lessons),lessonMap=new Map(allLessons.map(l=>[l.id,l]));
+app.use(helmet({contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'","'unsafe-inline'"],imgSrc:["'self'","data:"],connectSrc:["'self'"]}}}));app.use(express.json({limit:"30kb"}));app.use(express.static(path.join(__dirname,"public")));
+const limiter=rateLimit({windowMs:900000,limit:30,standardHeaders:"draft-7",legacyHeaders:false}),norm=v=>String(v??"").trim().toLowerCase().replace(/\s+/g," "),validUser=v=>/^[a-z0-9._-]{3,30}$/i.test(String(v||"")),validPass=v=>typeof v==="string"&&v.length>=8&&v.length<=72;
+const safe=u=>{if(!u)return null;const{password_hash,...x}=u;return x},userById=id=>db.prepare("SELECT u.id,u.name,u.email,u.username,u.role,u.xp,u.process_id,u.active,u.created_at,p.name process_name,p.join_code process_code FROM users u LEFT JOIN processes p ON p.id=u.process_id WHERE u.id=?").get(id);
+const token=u=>jwt.sign({id:u.id},secret,{expiresIn:"7d"}),session=(res,u,status=200)=>res.status(status).json({token:token(u),user:safe(u)});
+function auth(req,res,next){try{const t=(req.headers.authorization||"").replace(/^Bearer /,"");const p=jwt.verify(t,secret),u=userById(p.id);if(!u||!u.active)return res.status(401).json({error:"Conta inexistente ou desativada."});req.user=u;next();}catch{return res.status(401).json({error:"Faça login para continuar."});}}
+const role=(r)=>(req,res,next)=>req.user.role===r?next():res.status(403).json({error:"Acesso não permitido."}),admin=role("admin"),manager=role("process"),student=(req,res,next)=>req.user.role==="student"&&req.user.process_id?next():res.status(403).json({error:"Acesso exclusivo de aluno vinculado a processo."});
+function code(){let x;do{x=crypto.randomBytes(4).toString("hex").toUpperCase();}while(db.prepare("SELECT id FROM processes WHERE join_code=?").get(x));return x;}
+app.get("/api/health",(_q,s)=>s.json({ok:true,app:"STK Academy"}));
+app.get("/api/setup/status",(_q,s)=>s.json({needsAdmin:db.prepare("SELECT COUNT(*) n FROM users WHERE role='admin'").get().n===0}));
+app.post("/api/setup/admin",limiter,async(req,res)=>{if(db.prepare("SELECT COUNT(*) n FROM users WHERE role='admin'").get().n)return res.status(403).json({error:"O administrador principal já foi cadastrado."});const name=String(req.body.name||"").trim(),username=String(req.body.username||"").trim().toLowerCase(),password=String(req.body.password||"");if(name.length<2||!validUser(username)||!validPass(password))return res.status(400).json({error:"Informe nome, usuário válido (3 a 30 caracteres) e senha (8 a 72 caracteres)."});try{const hash=await bcrypt.hash(password,12),tx=db.transaction(()=>{if(db.prepare("SELECT COUNT(*) n FROM users WHERE role='admin'").get().n)throw Error("ADMIN_EXISTS");const x=db.prepare("INSERT INTO users(name,email,username,password_hash,role) VALUES(?,?,?,?, 'admin')").run(name,username+"@admin.stk.local",username,hash);return userById(x.lastInsertRowid);});session(res,tx(),201);}catch(e){res.status(e.message==="ADMIN_EXISTS"?403:409).json({error:"Administrador já criado ou usuário indisponível."});}});
+app.post("/api/auth/login",limiter,async(req,res)=>{const login=String(req.body.login||req.body.username||"").trim().toLowerCase(),u=db.prepare("SELECT * FROM users WHERE lower(username)=? OR lower(email)=?").get(login,login);if(!u||!u.active||!(await bcrypt.compare(String(req.body.password||""),u.password_hash)))return res.status(401).json({error:"Usuário ou senha incorretos."});session(res,userById(u.id));});
+app.post("/api/auth/register",limiter,async(req,res)=>{const name=String(req.body.name||"").trim(),username=String(req.body.username||"").trim().toLowerCase(),password=String(req.body.password||""),p=db.prepare("SELECT id FROM processes WHERE join_code=?").get(String(req.body.processCode||"").trim().toUpperCase());if(!p)return res.status(404).json({error:"Código do processo não encontrado."});if(name.length<2||!validUser(username)||!validPass(password))return res.status(400).json({error:"Informe nome, usuário válido e senha com pelo menos 8 caracteres."});try{const hash=await bcrypt.hash(password,12),x=db.prepare("INSERT INTO users(name,email,username,password_hash,role,process_id) VALUES(?,?,?,?, 'student',?)").run(name,username+"@aluno.stk.local",username,hash,p.id);session(res,userById(x.lastInsertRowid),201);}catch{res.status(409).json({error:"Este usuário já está cadastrado."});}});
+app.get("/api/me",auth,(q,s)=>s.json({user:safe(q.user)}));
+app.get("/api/courses",(_q,s)=>s.json(allCourses.map(c=>({...c,lessons:c.lessons.map(({answer,solution,...l})=>l)}))));
+app.get("/api/progress",auth,(q,s)=>{if(q.user.role!=="student")return s.json({completed:0,total:allLessons.length,xp:q.user.xp,lessons:[]});const rows=db.prepare("SELECT lesson_id,completed,best_score,attempts,completed_at FROM lesson_progress WHERE user_id=?").all(q.user.id);s.json({completed:rows.filter(r=>r.completed).length,total:allLessons.length,xp:q.user.xp,lessons:rows});});
+app.post("/api/lessons/:id/submit",auth,student,(q,s)=>{const l=lessonMap.get(q.params.id);if(!l)return s.status(404).json({error:"Desafio não encontrado."});const answer=String(q.body.answer??"").slice(0,1000),correct=norm(answer)===norm(l.answer),old=db.prepare("SELECT completed FROM lesson_progress WHERE user_id=? AND lesson_id=?").get(q.user.id,l.id),first=correct&&!old?.completed;db.transaction(()=>{db.prepare("INSERT INTO attempts(user_id,lesson_id,answer,correct) VALUES(?,?,?,?)").run(q.user.id,l.id,answer,correct?1:0);db.prepare(\`INSERT INTO lesson_progress(user_id,lesson_id,completed,best_score,attempts,completed_at) VALUES(?,?,?,?,1,CASE WHEN ?=1 THEN CURRENT_TIMESTAMP ELSE NULL END) ON CONFLICT(user_id,lesson_id) DO UPDATE SET completed=MAX(completed,excluded.completed),best_score=MAX(best_score,excluded.best_score),attempts=attempts+1,completed_at=COALESCE(completed_at,excluded.completed_at)\`).run(q.user.id,l.id,correct?1:0,correct?100:0,correct?1:0);if(first)db.prepare("UPDATE users SET xp=xp+? WHERE id=?").run(l.xp,q.user.id);})();const u=userById(q.user.id),n=db.prepare("SELECT COUNT(*) n FROM lesson_progress WHERE user_id=? AND completed=1").get(q.user.id).n;s.json({correct,firstCompletion:first,xpEarned:first?l.xp:0,user:safe(u),completed:n,total:allLessons.length,feedback:correct?l.solution:l.hint});});
+app.get("/api/leaderboard",auth,(q,s)=>{if(q.user.role==="admin")return s.json(db.prepare("SELECT u.name,u.username,u.xp,COUNT(lp.lesson_id) completed,p.name process_name FROM users u LEFT JOIN lesson_progress lp ON lp.user_id=u.id AND lp.completed=1 LEFT JOIN processes p ON p.id=u.process_id WHERE u.role='student' GROUP BY u.id ORDER BY u.xp DESC LIMIT 100").all());s.json(db.prepare("SELECT u.name,u.username,u.xp,COUNT(lp.lesson_id) completed FROM users u LEFT JOIN lesson_progress lp ON lp.user_id=u.id AND lp.completed=1 WHERE u.role='student' AND u.process_id=? GROUP BY u.id ORDER BY u.xp DESC LIMIT 100").all(q.user.process_id||-1));});
+app.get("/api/certificate",auth,student,(q,s)=>{const n=db.prepare("SELECT COUNT(*) n FROM lesson_progress WHERE user_id=? AND completed=1").get(q.user.id).n;if(n<allLessons.length)return s.status(403).json({error:"Conclua todos os desafios para liberar o certificado.",completed:n,total:allLessons.length});s.json({name:q.user.name,course:"STK Academy — Programação e Sistema STOK",completedAt:new Date().toISOString(),code:"STK-"+q.user.id+"-"+n});});
+app.post("/api/admin/processes",auth,admin,async(q,s)=>{const name=String(q.body.processName||"").trim(),description=String(q.body.description||"").trim().slice(0,500),managerName=String(q.body.managerName||"").trim(),username=String(q.body.managerUsername||"").trim().toLowerCase(),password=String(q.body.managerPassword||"");if(name.length<2||managerName.length<2||!validUser(username)||!validPass(password))return s.status(400).json({error:"Preencha nome do processo, responsável, usuário válido e senha de pelo menos 8 caracteres."});try{const hash=await bcrypt.hash(password,12),result=db.transaction(()=>{const p=db.prepare("INSERT INTO processes(name,description,join_code) VALUES(?,?,?)").run(name,description,code()),u=db.prepare("INSERT INTO users(name,email,username,password_hash,role,process_id) VALUES(?,?,?,?, 'process',?)").run(managerName,username+"@process.stk.local",username,hash,p.lastInsertRowid);db.prepare("UPDATE processes SET manager_id=? WHERE id=?").run(u.lastInsertRowid,p.lastInsertRowid);return{id:p.lastInsertRowid,name,description,joinCode:db.prepare("SELECT join_code FROM processes WHERE id=?").get(p.lastInsertRowid).join_code,manager:{name:managerName,username}};})();s.status(201).json(result);}catch{s.status(409).json({error:"Usuário do responsável já cadastrado."});}});
+app.get("/api/admin/dashboard",auth,admin,(_q,s)=>{const processes=db.prepare("SELECT p.id,p.name,p.description,p.join_code joinCode,u.name managerName,u.username managerUsername,COUNT(st.id) students FROM processes p LEFT JOIN users u ON u.id=p.manager_id LEFT JOIN users st ON st.process_id=p.id AND st.role='student' GROUP BY p.id ORDER BY p.id DESC").all(),students=db.prepare("SELECT u.id,u.name,u.username,u.xp,u.created_at,p.id processId,p.name processName,COUNT(lp.lesson_id) completed FROM users u JOIN processes p ON p.id=u.process_id LEFT JOIN lesson_progress lp ON lp.user_id=u.id AND lp.completed=1 WHERE u.role='student' GROUP BY u.id ORDER BY u.created_at DESC").all();s.json({processes,students,totals:{processes:processes.length,managers:processes.length,students:students.length,lessons:allLessons.length}});});
+app.get("/api/admin/processes/:id",auth,admin,(q,s)=>{const p=db.prepare("SELECT p.id,p.name,p.description,p.join_code joinCode,u.name managerName,u.username managerUsername FROM processes p LEFT JOIN users u ON u.id=p.manager_id WHERE p.id=?").get(q.params.id);if(!p)return s.status(404).json({error:"Processo não encontrado."});const students=db.prepare("SELECT u.id,u.name,u.username,u.xp,COUNT(lp.lesson_id) completed FROM users u LEFT JOIN lesson_progress lp ON lp.user_id=u.id AND lp.completed=1 WHERE u.process_id=? AND u.role='student' GROUP BY u.id").all(p.id);s.json({process:p,students,totals:{students:students.length,lessons:allLessons.length}});});
+app.get("/api/process/dashboard",auth,manager,(q,s)=>{const p=db.prepare("SELECT id,name,description,join_code joinCode FROM processes WHERE id=?").get(q.user.process_id),students=db.prepare("SELECT u.id,u.name,u.username,u.xp,COUNT(lp.lesson_id) completed FROM users u LEFT JOIN lesson_progress lp ON lp.user_id=u.id AND lp.completed=1 WHERE u.process_id=? AND u.role='student' GROUP BY u.id ORDER BY u.name").all(q.user.process_id);s.json({process:p,students,totals:{students:students.length,lessons:allLessons.length}});});
+app.post("/api/process/students",auth,manager,async(q,s)=>{const name=String(q.body.name||"").trim(),username=String(q.body.username||"").trim().toLowerCase(),password=String(q.body.password||"");if(name.length<2||!validUser(username)||!validPass(password))return s.status(400).json({error:"Informe nome, usuário válido e senha com pelo menos 8 caracteres."});try{const hash=await bcrypt.hash(password,12),x=db.prepare("INSERT INTO users(name,email,username,password_hash,role,process_id) VALUES(?,?,?,?, 'student',?)").run(name,username+"@aluno.stk.local",username,hash,q.user.process_id);s.status(201).json({student:safe(userById(x.lastInsertRowid))});}catch{s.status(409).json({error:"Este usuário já está cadastrado na plataforma."});}});
+app.get("*",(q,s,next)=>q.path.startsWith("/api/")?next():s.sendFile(path.join(__dirname,"public","index.html")));app.use("/api",(_q,s)=>s.status(404).json({error:"Rota não encontrada."}));app.use((e,_q,s,_n)=>{console.error(e);s.status(500).json({error:"Erro interno."});});app.listen(PORT,()=>console.log("STK Academy disponível na porta "+PORT));

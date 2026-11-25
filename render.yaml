@@ -2,18 +2,14 @@ services:
   - type: web
     name: stk-academy
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/health
-    disk:
-      name: stk-academy-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
       - key: DB_PATH
-        value: /var/data/stk-academy.sqlite
+        value: /tmp/stk-academy.sqlite
       - key: JWT_SECRET
         generateValue: true
